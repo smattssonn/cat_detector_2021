@@ -134,7 +134,7 @@ def train(dataloaders, dataset_sizes, model, criterion, optimizer, scheduler, de
 
 
 # Prepare a dataloader for visualization
-def imagePredictions(model, image_size, pred_dir, pred_threshold=None):
+def imagePredictions(model, image_size, pred_dir, pred_threshold=None, pred_label_considered=0, batch_size=None):
     # transforms are the same as 'val' transforms during train(...)
     data_transforms = transforms.Compose([
             transforms.Resize(image_size),
@@ -145,28 +145,30 @@ def imagePredictions(model, image_size, pred_dir, pred_threshold=None):
     
     
     pred_dataset = datasets.ImageFolder(pred_dir, data_transforms)
+    
+    if batch_size is None:
+        batch_size = len(pred_dataset)
 
-    pred_dataloader = torch.utils.data.DataLoader(pred_dataset, batch_size=len(pred_dataset),
+    pred_dataloader = torch.utils.data.DataLoader(pred_dataset, batch_size=batch_size,
                                                   shuffle=False, num_workers=1)
 
     visualizeModel(model, pred_dataloader, pred_threshold)
 
 
 # Run model and make predictions
-# If a threshold is set, the highest label 
-def visualizeModel(model, dataloader, pred_threshold):
+def visualizeModel(model, dataloader, pred_threshold=None, pred_label_considered=0):
     model.eval()
 
     with torch.no_grad():
         for i, (inputs, labels) in enumerate(dataloader):
             inputs = inputs.to(device)
             labels = labels.to(device)
-
+            
             outputs = model(inputs)
-            vals, preds = getPredictedLabel(outputs, threshold=pred_threshold)
+            vals, preds = getPredictedLabel(outputs, threshold=pred_threshold, label_considered=pred_label_considered)
 
             for j in range(inputs.size()[0]):
-                
+                label = vals[j].item()
                 # include the predicted label if it is cat or dog
                 if class_names[preds[j]] != 'neither':
                     label = class_names[preds[j]] 
@@ -187,8 +189,10 @@ This would act as a "cat detector" and return neither ALSO if dog has the
 highest output value.
 """
 def getPredictedLabel(model_out, threshold=None, label_considered=0):
+    # mode 1
     if threshold is None:
         vals, preds = torch.max(model_out, 1)
+    # mode 2
     else:
         vals = torch.zeros(len(model_out))
         preds = torch.zeros(len(model_out)).int()
@@ -260,7 +264,7 @@ def setupPipeline(seed,
                   save,
                   load,
                   savepath,
-                  train
+                  train_model
                   ):
     random.seed(seed)
     
@@ -268,9 +272,18 @@ def setupPipeline(seed,
     # Just normalization for validation
     data_transforms = {
         'train': transforms.Compose([
+            transforms.Resize(int(image_size*1.2)),
             transforms.RandomResizedCrop(image_size),
+            transforms.RandomApply(p=0.1, transforms=
+                [transforms.Pad(int(image_size*0.33), padding_mode='constant')]
+                ),
+            transforms.Resize(image_size),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
+            transforms.ColorJitter(brightness=0.1,
+                                    contrast=0.1, 
+                                    saturation=0.1, 
+                                    hue=0.1),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
             transforms.RandomErasing(p=0.25),
         ]),
@@ -287,7 +300,7 @@ def setupPipeline(seed,
     
     # train determines if training or validation datasets are loaded
     # pick False if you are only interested in predictions on video
-    if train:
+    if train_model:
         
         # Load cats_and_dogs and imagenet 1000 datasets separately
         image_datasets_cats_dogs = {x: datasets.ImageFolder(os.path.join(data_dir1, x),
@@ -342,6 +355,10 @@ def setupPipeline(seed,
         dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
         
         
+        # Plot some training images
+        inputs, classes = next(iter(dataloaders['train']))
+        out = torchvision.utils.make_grid(inputs, nrow=4)
+        imshow(out)
         
     
         print('Dataset sizes (train/val): {}/{}'.format(
@@ -355,14 +372,13 @@ def setupPipeline(seed,
     
     model_ft = model_ft.to(device)
     
-    
 
     # Load previous model?
     if load:
         model_ft.load_state_dict(torch.load(savepath))     
         print('Model loaded')
     
-    if train:
+    if train_model:
         
         criterion = nn.CrossEntropyLoss()
     
@@ -370,10 +386,38 @@ def setupPipeline(seed,
         
         # Decay LR by a factor of 0.1 every 7 epochs
         exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=7, gamma=0.1)
-
-        model_ft = train(dataloaders, dataset_sizes, model_ft, criterion, optimizer_ft, 
-                         exp_lr_scheduler, device, num_epochs=num_epochs)
-    
+        
+        if not save:
+            print('Training WITHOUT saving model')
+        
+        
+        # Train model
+        oom = False
+        try:
+            model_ft = train(dataloaders, dataset_sizes, model_ft, 
+                             criterion, optimizer_ft, 
+                             exp_lr_scheduler, device, 
+                             num_epochs)
+        except RuntimeError: # Out of memory
+            oom = True
+        
+        # If out of memory, try a smaller batch size
+        if oom:
+            batch_size = int(batch_size/2)
+            
+            print('OOM - trying smaller batch size %d' %(batch_size))
+                
+            # Redefine smaller batch dataloader
+            for x in ['train', 'val']: 
+                dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=batch_size,
+                                                              shuffle=True, num_workers=1)
+                              for x in ['train', 'val']}
+                
+            model_ft = train(dataloaders, dataset_sizes, model_ft, 
+                             criterion, optimizer_ft, 
+                             exp_lr_scheduler, device, 
+                             num_epochs)
+        
     # Save model?
     if save:
         torch.save(model_ft.state_dict(), savepath)
