@@ -189,7 +189,7 @@ This would act as a "cat detector" and return neither ALSO if dog has the
 highest output value.
 """
 def getPredictedLabel(model_out, threshold=None, label_considered=0):
-    # mode 1
+    # mode 1 (only for debugging)
     if threshold is None:
         vals, preds = torch.max(model_out, 1)
     # mode 2

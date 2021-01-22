@@ -8,18 +8,19 @@ import matplotlib.pyplot as plt
 import os
 import pytube
 from urllib.parse import urlparse
+import numpy as np
 
 
     
 # Dataset class consistent with torch
 class VideoDataset(Dataset):
 
-    def __init__(self, video_filepath, image_size, scan_res, video_crop=None):
+    def __init__(self, video_filepath, image_size, scan_res, video_crop=None, do_fivecrop=False):
         self.video_filepath = video_filepath
         self.image_size = image_size
         self.scan_res = scan_res
         self.video_crop = video_crop
-        
+        self.do_fivecrop = do_fivecrop
         
         self.video_transforms = transforms.Compose(
             [transforms.ToPILImage(),
@@ -57,30 +58,44 @@ class VideoDataset(Dataset):
         # frames contains image pixels and timestamps the time at which they occur in the video
         frames, timestamps = [], []
         t = 0.
-        frames.append(self._cv2frameToNumpyImage(frame))
-        timestamps.append(t)
 
         # Start adding frames every "scan_res-th" second
         while ret:
             t += 1./fr
             ret, frame = videocapture.read()
     
-            # Break loop after certain time
+            # Break loop after certain time?
             if max_t is not None:
                 if t > float(max_t):
                     break
-            # Check if next frame should be appended depending on the remainder operator of this and the previous frame
-            if t % scan_res < (t - 1./fr) % scan_res:
-                frames.append(self._cv2frameToNumpyImage(frame))
-                timestamps.append(t)
+            # Check if next frame (or first frame) should be appended
+            if t % scan_res < (t - 1./fr) % scan_res or t == 1./fr:
+                if not self.do_fivecrop:
+                    # Don't fivecrop frame
+                    frames.append(self._cv2frameToNumpyImage(frame))
+                    timestamps.append(t)
+                else:
+                    # Fivecrop frame
+                    crop_transforms = transforms.Compose([
+                        transforms.ToPILImage(),
+                        transforms.Resize(self.image_size*2),
+                        transforms.FiveCrop(self.image_size),
+                        ])
+                    fivecropped_frames = crop_transforms(frame)
+                    # Append whole and five-cropped frames
+                    frames.append(self._cv2frameToNumpyImage(frame))
+                    timestamps.append(t)
+                    for f in fivecropped_frames:
+                        frames.append(self._cv2frameToNumpyImage(np.asarray(f)))
+                        timestamps.append(t)
         
         self.scan_length = t        
         
         return frames, timestamps
     
     # Convert cv2 video output to numpy Image, changing from BGR to RGB format
-    def _cv2frameToNumpyImage(self, frame):
-        frame[:,:,[0,2]] = frame[:,:,[2,0]]
+    def _cv2frameToNumpyImage(self, frame_bgr):
+        frame = frame_bgr[...,::-1]
         return frame
 
      # Convert cv2 video output to numpy Image, changing from BGR to RGB format
@@ -99,7 +114,11 @@ class VideoDataset(Dataset):
       
 
 # Download youtube video and create VideoDataset class from the downloaded file
-def datasetFromYoutubeUrl(url, image_size=128, scan_res=1., video_crop=None):
+def datasetFromYoutubeUrl(url, 
+                          image_size=128, 
+                          scan_res=1., 
+                          video_crop=None,
+                          do_fivecrop=False):
 
     dest = urlparse(url)
     # Video id is given in the url query after "v=" and before any "&"
@@ -118,23 +137,19 @@ def datasetFromYoutubeUrl(url, image_size=128, scan_res=1., video_crop=None):
         yt.streams.first().download(vid_dir, vid_id)
     
     
-    dataset = VideoDataset(video_filepath, image_size, scan_res, video_crop)
+    dataset = VideoDataset(video_filepath, image_size, scan_res, video_crop, do_fivecrop)
     
     return dataset, video_filepath
 
         
 if __name__ == "__main__":
     
+    # # Example loading mp4 file
     # videofile="predictions/videos/cat_video.mp4"
     
-    # Example destination of website
-    url = "https://www.youtube.com/watch?v=PyLGDYE88GI"
-    
-    vid_dir = 'predictions/videos/youtube/'
+    # # Example usage of website
+    # url = "https://www.youtube.com/watch?v=PyLGDYE88GI"
+    # dataset, filepath = datasetFromYoutubeUrl(url)
+    # dataset.showFrames()
 
-    
-    dataset, filepath = datasetFromYoutubeUrl(url)
-    print(filepath)
-    dataset.showFrames()
-
-
+    print()
