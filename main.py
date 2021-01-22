@@ -2,147 +2,137 @@
 
 import video as vid
 import train as trn
-import sys
-import time
-from datetime import datetime
 import torch
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import numpy as np
+from pathlib import Path
+
+'''
+
+This program trains a pre-trained resnet18 model to classify images
+of cats, dogs or objects which are neither of them. The program is run from
+the main.py file. The two datasets used are specified below, and should be 
+extracted into data/. Two further included modules are imported (see below).
 
 
+main.py (this file) contains some calculation hyperparameters and features 
+which may be turned on and off, such as saving or loading a trained model from 
+disk. This file also contains directories and the youtube url for material
+to be evaluated by a trained model (prediction)
+
+Some comments on hyperparameters:
+- Dataset size: due to the transferred weights from the pre-trained model, 
+relatively small dataset sizes are sufficient. Fractions of 0.1-0.4 have been tested.
+- Image resolution: may be changed, possibly with a decrease in batch size
+- Number of epochs: an optimizer scheduler decreases the learning rate by
+0.1 every 5th epoch (train.py)
+- THRESHOLD: specifies how strong an output a image must yield, during prediction,
+in order to classify the image as cat or dog (cat/dog specified by LOOK_FOR)
+- DO_FIVECROP: further splits each video frame into five smaller chunks, increasing 
+the likelihood of detecting a cat (dataset enhancement, six times as costly).
+
+train.py contains the NN parts, basically a residual convolutional neural network
+which are loaded from a resnet18 model pretrained on the imagenet 1000 dataset.
+Further hyperparameters are defined here, including learning rate, momentum etc.
+Also, modifications to the model structure may be made (e.g. dropout).
+
+video.py contains a pytorch dataset class implementation that loads an mp4 video file
+into a pytorch dataset. This dataset is called upon by main.py. 
+video.py also contains parts that download the youtube mp4, decodes and splits it into 
+frames of a given time resolution (defined in main.py). Videos may be cropped after a 
+certain time. 
+Furthermore, the file contains a VideoScanner class which contains auxiliary functions 
+to perform a detection scan on a video from a trained model
 
 
-# Run video dataset through a trained model
-def scanVideo(dataloader, model):
-    since = time.time()
-    
-    model.eval()   # Set model to evaluate mode
-    
-    preds_out = []
-    timestamps_out = []
+10000 images, Dogs & Cats dataset
+https://www.kaggle.com/chetankv/dogs-cats-images
 
-    for i, data in enumerate(dataloader):
-            
-            
-        frames, timestamps = data
-        frames = frames.to(device)
-        
-        preds = model(frames).tolist()
+ca. 38000 misc images, ImageNet 1000 dataset
+Class indices 151-268 (dogs) and 281-285 (cats) removed
+https://www.kaggle.com/ifigotin/imagenetmini-1000
 
-        # Add each frame output (f) to the list of results (preds_out)
-        for f in preds:
-            preds_out.append(f)
-        
-        timestamps_out += timestamps.tolist()
-        
-        # Phase status bar
-        sys.stdout.write('\r')
-        j = (i + 1) / len(dataloader)
-        sys.stdout.write('[%-20s] %d%% ' % ('='*int(20*j), 100*j))
-        sys.stdout.flush()
-                
+Extract datasets into data/
 
-    time_elapsed = time.time() - since
-    print('Video scan completed in {:.0f}m {:.0f}s'.format(
-        time_elapsed // 60, time_elapsed % 60))
-
-    # If a frame has several cropped portions (e.g. FiveCrop)
-    # get maximum predicted output for each class out of the cropped
-    # frames
-    preds_out, timestamps_out = getFrameMaximum(preds_out, timestamps_out)
-
-    return preds_out, timestamps_out
-
-""" 
-Takes the best score from all predictions at a certain timestamp
-This is necessary to consider five-cropped images which 
-run several times through the model
-"""
-def getFrameMaximum(preds_out, timestamps_out):
-
-    outzip = list(zip(timestamps_out, preds_out))
-    
-    # Make list of only unique timestamps
-    unique_ts = []
-    for t in timestamps_out:
-        if t not in unique_ts:
-            unique_ts.append(t)
-    
-    # Get the best scores for each class
-    best_score = []
-    for t in unique_ts:
-        tmplist = [ps for ts, ps in outzip if ts == t]
-        best_score.append(max(tmplist))
-    
-    return best_score, unique_ts
+'''
 
 
-# program control
+# Program control
 save = False
-load = True
-train_model = False
+load = False
+train_model = True
 
-## hyperparameters
+show_video_frames = False   # plot each scanned video frame (for performance testing)
+predict_on_images = False   # make predictions on all images in a directory
+plot_prediction = True      # plot the detection of the target vs the seconds
+
+# HYPERPARAMETERS
 SEED = 999
-IMAGE_SIZE = 224
-# training
+IMAGE_SIZE = 336
+# Training
 BATCH_SIZE = 16
 NUM_EPOCHS = 5
-DS_FRACTION_CAT_DOG = 0.8
-DS_FRACTION_NEITHER = 0.4
-# video analysis
-SCAN_RES = 0.1
-VIDEO_CROP = 120
-THRESHOLD = 0.25
-LOOK_FOR = 0    # 0: cats, 1: dogs
-
-# directories/files
-data_dir_cat_dog = 'data/cats_and_dogs'
-data_dir_neither = 'data/imagenet-mini'
-videofile='predictions/videos/dido_emilia.mp4'
-savepath = 'saved_model_336px'
-# yt_video_url='https://www.youtube.com/watch?v=VXT1Nqr_qQs'  persian pokemon
-yt_video_url='https://www.youtube.com/watch?v=DdX7IsBlOC4' # funny animals
-# yt_video_url='https://www.youtube.com/watch?v=RxozAnVBWio' 
-
+DS_FRACTION_CAT_DOG = 0.3   # fraction of cat_dog dataset? (1.0 -> full dataset)
+DS_FRACTION_NEITHER = 0.2   # fraction of neither dataset?
+# Video analysis
+SCAN_RES = 0.1              # timestep between video frames
+VIDEO_CROP = None           # video cropping after x seconds
+THRESHOLD = 0.50            # sensitivity parameter towards detection
+LOOK_FOR = 0                # 0: cats, 1: dogs
+DO_FIVECROP = True          # also crop video frames into five smaller pieces?
+                            # -> increases probability of detection
+# Processing unit
 ngpu = 1
-device = torch.device('cuda:0' if (torch.cuda.is_available() and ngpu > 0) else 'cpu')
+device = torch.device('cuda:0' if (torch.cuda.is_available() and ngpu > 0) 
+                      else 'cpu')
+
+# DIRECTORIES/FILES
+# Dataset image directories
+data_dir_cat_dog = Path('data/cats_and_dogs')
+data_dir_neither = Path('data/imagenet-mini')
+
+# This youtube video is downloaded and scanned
+yt_video_url='https://www.youtube.com/watch?v=olRi5-AOn1A'
+
+# If predict_on_images: All images in this directory will be scanned
+image_predictions_dir = Path('predictions/img/' )
+
+# If save or load: Path to save or load model
+savepath = Path('saved_model')
+
 
 
 if __name__=="__main__":
     
-
-    model = trn.setupPipeline(SEED, 
-                              batch_size=BATCH_SIZE, 
-                              num_epochs=NUM_EPOCHS, 
-                              data_dir1=data_dir_cat_dog, 
-                              data_dir2=data_dir_neither, 
-                              image_size=IMAGE_SIZE, 
-                              dataset_fraction_cats_dogs=DS_FRACTION_CAT_DOG, 
-                              dataset_fraction_neither=DS_FRACTION_NEITHER,
-                              save=save,
-                              load=load,
-                              savepath=savepath,
-                              train_model=train_model,
-                              )
+    # Setup (and train?) model
+    model = trn.setupModel(SEED, 
+                           batch_size=BATCH_SIZE, 
+                           num_epochs=NUM_EPOCHS, 
+                           data_dir1=data_dir_cat_dog, 
+                           data_dir2=data_dir_neither, 
+                           image_size=IMAGE_SIZE, 
+                           dataset_fraction_cats_dogs=DS_FRACTION_CAT_DOG, 
+                           dataset_fraction_neither=DS_FRACTION_NEITHER,
+                           save=save,
+                           load=load,
+                           savepath=savepath,
+                           train_model=train_model,
+                           )
     
     
     
-    # # Dataset from video file
-    # video_dataset = vid.VideoDataset(videofile, 
+    # # Optionally: Dataset from video file
+    # prediction_videofile = Path('predictions/videos/some_video_file.mp4')
+    # video_dataset = vid.VideoDataset(prediction_videofile, 
     #                                   IMAGE_SIZE, 
     #                                   SCAN_RES, 
     #                                   video_crop=VIDEO_CROP,
-    #                                   do_fivecrop=True)
+    #                                   do_fivecrop=DO_FIVECROP)
     
     # Dataset from youtube url
     video_dataset, video_path = vid.datasetFromYoutubeUrl(yt_video_url, 
                                       IMAGE_SIZE, 
                                       SCAN_RES, 
                                       video_crop=VIDEO_CROP,
-                                      do_fivecrop=True)
-    # print("Scanning:", video_path)
+                                      do_fivecrop=DO_FIVECROP)
     
     video_dataloader = torch.utils.data.DataLoader(video_dataset, 
                                                    batch_size=BATCH_SIZE,
@@ -150,56 +140,37 @@ if __name__=="__main__":
     
     
     
-    # # Visualize results on images in image prediction folder
-    # trn.imagePredictions(model=model, image_size=IMAGE_SIZE, 
-    #                       pred_dir='predictions/img/', 
-    #                       pred_threshold=THRESHOLD,
-    #                       pred_label_considered=LOOK_FOR,
-    #                       batch_size=BATCH_SIZE)
+    # PREDICTION OPTIONS
+    
+    if predict_on_images:
+        # Visualize results on images in image prediction folder
+        trn.imagePredictions(model=model, 
+                             image_size=IMAGE_SIZE, 
+                              pred_dir=image_predictions_dir, 
+                              pred_threshold=THRESHOLD,
+                              pred_label_considered=LOOK_FOR,
+                              batch_size=BATCH_SIZE)
     
     
-    # # Visualize the frames of video
-    # trn.visualizeModel(model, video_dataloader, 
-    #                     pred_threshold=THRESHOLD, 
-    #                     pred_label_considered=LOOK_FOR)
+    if show_video_frames:
+        # Visualize the frames of video
+        trn.visualizeModel(model, 
+                           video_dataloader, 
+                            pred_threshold=THRESHOLD, 
+                            pred_label_considered=LOOK_FOR)
     
     
-    # Plot target detection as a function of time
-    preds_out, timestamps_out = scanVideo(video_dataloader, model)
     
-    
-    _, pred_target = trn.getPredictedLabel(preds_out, 
-                                            threshold=THRESHOLD, 
-                                            label_considered=LOOK_FOR)
-    
-    pred_target_plot = []
-    for i in pred_target:
-        if i == LOOK_FOR:
-            pred_target_plot.append(1) 
-        else:
-            pred_target_plot.append(0)
-    
-    plt.plot(np.array(timestamps_out), pred_target_plot, label=trn.class_names[LOOK_FOR])
-    plt.xticks(np.arange(0, video_dataset.scan_length+1, 10))
-    plt.tick_params(axis ='x', labelsize = 8, rotation = 90)
-
-
-    # preds_out, timestamps_out = getFrameMaximum(preds_out, timestamps_out)
-    
-    # _, pred_target = trn.getPredictedLabel(preds_out, 
-    #                                         threshold=THRESHOLD, 
-    #                                         label_considered=LOOK_FOR)
-    
-    # pred_target_plot = []
-    # for i in pred_target:
-    #     if i == LOOK_FOR:
-    #         pred_target_plot.append(1) 
-    #     else:
-    #         pred_target_plot.append(0)
-    
-    # plt.plot(np.array(timestamps_out), pred_target_plot, label=trn.class_names[LOOK_FOR])
-
-    plt.show()
+    if plot_prediction:
+        # Plot target detection as a function of time
+        # Use VideoScanner class for relevant functions
+        video_scanner = vid.VideoScanner(video_dataloader)
+        preds_out, time_seconds_out = video_scanner.scanVideo(model, device)
+        video_scanner.plotTargetDetection(trn, 
+                                          preds_out, 
+                                          time_seconds_out, 
+                                          THRESHOLD, 
+                                          LOOK_FOR)
     
     
     
