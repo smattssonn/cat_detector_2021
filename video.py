@@ -124,7 +124,7 @@ class VideoDataset(Dataset):
             path = Path('{}/{}.jpg'.format(outdir, round(t, 2)))
             im.save(path)
 
-    # Plot frames of the video (mainly debugging)
+    # Plot frames of the video (mainly debugging or performance testing)
     def showFrames(self):
         for frame, t in zip(self.frames, self.time_seconds):
             im = Image.fromarray(frame)
@@ -261,14 +261,3 @@ def datasetFromYoutubeUrl(url,
     return dataset, video_filepath
 
         
-if __name__ == '__main__':
-    
-    # # Example loading mp4 file
-    # videofile="predictions/videos/cat_video.mp4"
-    
-    # # Example usage of website
-    # url = "https://www.youtube.com/watch?v=abcdefghijk"
-    # dataset, filepath = datasetFromYoutubeUrl(url)
-    # dataset.showFrames()
-
-    print()

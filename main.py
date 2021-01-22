@@ -11,6 +11,11 @@ This program trains a pre-trained resnet18 model to classify images
 of cats, dogs or objects which are neither of them. The program is run from
 the main.py file. The two datasets used are specified below, and should be 
 extracted into data/. Two further included modules are imported (see below).
+After training the model, predictions may be made either on a Youtube video 
+from its url or on all images in a specified directory. If the model output 
+for a cat (or dog) is high enough, a cat is "detected". In a video, the
+detection is a discrete function between 0 to 1 of the elapsed video time, 
+which may be plotted.
 
 
 main.py (this file) contains some calculation hyperparameters and features 
@@ -22,12 +27,14 @@ Some comments on hyperparameters:
 - Dataset size: due to the transferred weights from the pre-trained model, 
 relatively small dataset sizes are sufficient. Fractions of 0.1-0.4 have been tested.
 - Image resolution: may be changed, possibly with a decrease in batch size
-- Number of epochs: an optimizer scheduler decreases the learning rate by
-0.1 every 5th epoch (train.py)
 - THRESHOLD: specifies how strong an output a image must yield, during prediction,
 in order to classify the image as cat or dog (cat/dog specified by LOOK_FOR)
 - DO_FIVECROP: further splits each video frame into five smaller chunks, increasing 
 the likelihood of detecting a cat (dataset enhancement, six times as costly).
+- Number of epochs: an optimizer scheduler decreases the learning rate by
+0.1 every 5th epoch (train.py). Typically, only a few epochs a needed for decent
+predictive power
+- ngpu: specifies if one gpu (1) or the cpu (0) should be used
 
 train.py contains the NN parts, basically a residual convolutional neural network
 which are loaded from a resnet18 model pretrained on the imagenet 1000 dataset.
@@ -66,11 +73,11 @@ plot_prediction = True      # plot the detection of the target vs the seconds
 
 # HYPERPARAMETERS
 SEED = 999
-IMAGE_SIZE = 336
+IMAGE_SIZE = 224
 # Training
 BATCH_SIZE = 16
 NUM_EPOCHS = 5
-DS_FRACTION_CAT_DOG = 0.3   # fraction of cat_dog dataset? (1.0 -> full dataset)
+DS_FRACTION_CAT_DOG = 0.2   # fraction of cat_dog dataset? (1.0 -> full dataset)
 DS_FRACTION_NEITHER = 0.2   # fraction of neither dataset?
 # Video analysis
 SCAN_RES = 0.1              # timestep between video frames
